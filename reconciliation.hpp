@@ -69,14 +69,12 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
         GlobalLogSection _("apply_update");
 
         IdTaggedStateUpdateData wrapped{user_update, next_update_id++};
-        global_logger->info("Applying update: {}", to_string(wrapped));
+        global_logger->info("applying update: {}", to_string(wrapped));
 
-        global_logger->info("State before updating: {}", state_to_string_fn(get_state_fn()));
-
+        global_logger->info("state before applying: {}", state_to_string_fn(get_state_fn()));
         user_update_fn(wrapped.update_data, false);
         update_datas_applied_since_last_authorative_state.push_back(wrapped);
-
-        global_logger->info("State after updating: {}", state_to_string_fn(get_state_fn()));
+        global_logger->info("state after applying: {}", state_to_string_fn(get_state_fn()));
 
         return wrapped.id;
     }
@@ -97,25 +95,26 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
             [&](const IdTaggedStateUpdateData &u) { return u.id <= authoritative_state.last_sud_id_used_to_update; });
 
         if (it != update_datas_applied_since_last_authorative_state.end()) {
-            global_logger->info("Removing acknowledged updates up to id={}",
+            global_logger->info("removing acknowledged updates up to id={}",
                                 authoritative_state.last_sud_id_used_to_update);
         }
         update_datas_applied_since_last_authorative_state.erase(
             it, update_datas_applied_since_last_authorative_state.end());
 
-        global_logger->info("We need to reapply {} update datas, specifically we need to apply:",
+        global_logger->info("we need to reapply {} update datas, specifically we need to apply:",
                             update_datas_applied_since_last_authorative_state.size());
         for (const auto &u : update_datas_applied_since_last_authorative_state)
             global_logger->info("  [id={}]", u.id);
 
-        // Reapply unacknowledged updates
+        // reapply unacknowledged updates
         for (auto &u : update_datas_applied_since_last_authorative_state) {
-            global_logger->info("Reapplying state update data: {}", to_string(u));
+            global_logger->info("reapplying state update data: {}", to_string(u));
+            global_logger->info("state before re-applying: {}", state_to_string_fn(get_state_fn()));
             user_update_fn(u.update_data, true);
-            global_logger->info("State after: {}", state_to_string_fn(get_state_fn()));
+            global_logger->info("state after re-applying: {}", state_to_string_fn(get_state_fn()));
         }
 
-        // Compare final reconciled vs predicted
+        // compare final reconciled vs predicted
         global_logger->info("Finished reconciliation.");
         StateT reconciled_state = get_state_fn();
         global_logger->info("Predicted state was: {}", state_to_string_fn(predicted_state));
@@ -124,7 +123,6 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
                             diff_to_string_fn(predicted_state, reconciled_state));
     }
 
-    /// Called on server when applying client updates
     void server_apply_update(IdTaggedState &server_state, const IdTaggedStateUpdateData &update) {
         GlobalLogSection _("server_apply_update");
 
