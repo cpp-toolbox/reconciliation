@@ -8,9 +8,13 @@
 
 #include "sbpt_generated_includes.hpp"
 
-///
 /*
  * @brief Generic reconciliation system that hides internal bookkeeping.
+ *
+ * The point of reconciliation is you have some intermittent authorative state which drives some object being received
+ * with some delay, so locally you use StateUpdateData to update that object so that it feels live, which introduces
+ * some potential drift from the authorative state, but when you reconcile it keeps it a constant number of StateUpdates
+ * away from the authorative state.
  *
  * User defines:
  *  - StateT:  game state (position, velocity, etc.)
@@ -18,8 +22,7 @@
  *
  * Facts:
  * 1. As you reconcile your current state is always equal to the authorative state last used in reconciling plus a few
- * state update datas applied on top of it
- *
+ * state update datas applied on top of it (this is usually a constant number of updates)
  *
  */
 template <typename StateT, typename StateUpdateDataT> class Reconciliation {
@@ -30,7 +33,7 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
     };
 
     struct IdTaggedStateUpdateData {
-        StateUpdateDataT update;
+        StateUpdateDataT update_data;
         unsigned int id = 0;
     };
 
@@ -59,27 +62,26 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
     /**
      * @brief Applies an update and returns the update id assigned to it.
      *
+     * @return the id that was assigned to this update data
      * this function is utilized for regular updates and reconciliation updates
      */
     unsigned int apply_update(const StateUpdateDataT &user_update) {
-        LogSection _(*global_logger, "apply_update");
+        GlobalLogSection _("apply_update");
 
         IdTaggedStateUpdateData wrapped{user_update, next_update_id++};
-        global_logger->info("Applying update: {}", to_string(wrapped));
+        global_logger->info("applying update: {}", to_string(wrapped));
 
-        global_logger->info("State before updating: {}", state_to_string_fn(get_state_fn()));
-
-        user_update_fn(wrapped.update, false);
-        update_data_applied_since_last_authorative_state.push_back(wrapped);
-
-        global_logger->info("State after updating: {}", state_to_string_fn(get_state_fn()));
+        global_logger->info("state before applying: {}", state_to_string_fn(get_state_fn()));
+        user_update_fn(wrapped.update_data, false);
+        update_datas_applied_since_last_authorative_state.push_back(wrapped);
+        global_logger->info("state after applying: {}", state_to_string_fn(get_state_fn()));
 
         return wrapped.id;
     }
 
     /// Called on client when receiving authoritative server state
     void reconcile(const IdTaggedState &authoritative_state) {
-        LogSection _(*global_logger, "reconcile");
+        GlobalLogSection _("reconcile");
 
         StateT predicted_state = get_state_fn();
 
@@ -88,30 +90,31 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
 
         // Remove acknowledged updates
         auto it = std::remove_if(
-            update_data_applied_since_last_authorative_state.begin(),
-            update_data_applied_since_last_authorative_state.end(),
+            update_datas_applied_since_last_authorative_state.begin(),
+            update_datas_applied_since_last_authorative_state.end(),
             [&](const IdTaggedStateUpdateData &u) { return u.id <= authoritative_state.last_sud_id_used_to_update; });
 
-        if (it != update_data_applied_since_last_authorative_state.end()) {
-            global_logger->info("Removing acknowledged updates up to id={}",
+        if (it != update_datas_applied_since_last_authorative_state.end()) {
+            global_logger->info("removing acknowledged updates up to id={}",
                                 authoritative_state.last_sud_id_used_to_update);
         }
-        update_data_applied_since_last_authorative_state.erase(it,
-                                                               update_data_applied_since_last_authorative_state.end());
+        update_datas_applied_since_last_authorative_state.erase(
+            it, update_datas_applied_since_last_authorative_state.end());
 
-        global_logger->info("We need to reapply {} update datas, specifically we need to apply:",
-                            update_data_applied_since_last_authorative_state.size());
-        for (const auto &u : update_data_applied_since_last_authorative_state)
+        global_logger->info("we need to reapply {} update datas, specifically we need to apply:",
+                            update_datas_applied_since_last_authorative_state.size());
+        for (const auto &u : update_datas_applied_since_last_authorative_state)
             global_logger->info("  [id={}]", u.id);
 
-        // Reapply unacknowledged updates
-        for (auto &u : update_data_applied_since_last_authorative_state) {
-            global_logger->info("Reapplying state update data: {}", to_string(u));
-            user_update_fn(u.update, true);
-            global_logger->info("State after: {}", state_to_string_fn(get_state_fn()));
+        // reapply unacknowledged updates
+        for (auto &u : update_datas_applied_since_last_authorative_state) {
+            global_logger->info("reapplying state update data: {}", to_string(u));
+            global_logger->info("state before re-applying: {}", state_to_string_fn(get_state_fn()));
+            user_update_fn(u.update_data, true);
+            global_logger->info("state after re-applying: {}", state_to_string_fn(get_state_fn()));
         }
 
-        // Compare final reconciled vs predicted
+        // compare final reconciled vs predicted
         global_logger->info("Finished reconciliation.");
         StateT reconciled_state = get_state_fn();
         global_logger->info("Predicted state was: {}", state_to_string_fn(predicted_state));
@@ -120,12 +123,11 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
                             diff_to_string_fn(predicted_state, reconciled_state));
     }
 
-    /// Called on server when applying client updates
     void server_apply_update(IdTaggedState &server_state, const IdTaggedStateUpdateData &update) {
-        LogSection _(*global_logger, "server_apply_update");
+        GlobalLogSection _("server_apply_update");
 
         global_logger->info("Applying server update id={}", update.id);
-        user_update_fn(update.update, false);
+        user_update_fn(update.update_data, false);
         server_state.last_sud_id_used_to_update = update.id;
 
         global_logger->info("Server state after update id={}", update.id);
@@ -134,12 +136,20 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
 
     /// Helper to get the wrapped state for transmission
     IdTaggedState get_internal_state() const {
-        LogSection _(*global_logger, "get_internal_state");
+        GlobalLogSection _("get_internal_state");
 
         global_logger->info("Returning internal state -> next_id={}", next_update_id - 1);
         global_logger->info("{}", to_string(IdTaggedState{get_state_fn(), next_update_id - 1}));
 
         return {get_state_fn(), next_update_id - 1};
+    }
+
+    const std::vector<IdTaggedStateUpdateData> &get_update_datas_applied_since_last_authorative_state() const {
+        return update_datas_applied_since_last_authorative_state;
+    }
+
+    std::vector<IdTaggedStateUpdateData> get_update_data_applied_since_last_authorative_state_copy() const {
+        return update_datas_applied_since_last_authorative_state;
     }
 
   private:
@@ -152,12 +162,12 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
 
     std::string to_string(const IdTaggedStateUpdateData &u) const {
         std::ostringstream ss;
-        ss << "[id=" << u.id << "] " << update_to_string_fn(u.update);
+        ss << "[id=" << u.id << "] " << update_to_string_fn(u.update_data);
         return ss.str();
     }
 
   private:
-    std::vector<IdTaggedStateUpdateData> update_data_applied_since_last_authorative_state;
+    std::vector<IdTaggedStateUpdateData> update_datas_applied_since_last_authorative_state;
     unsigned int next_update_id = 1;
 
     UpdateFunction user_update_fn;
