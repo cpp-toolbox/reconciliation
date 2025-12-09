@@ -138,10 +138,10 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
     IdTaggedState get_internal_state() const {
         GlobalLogSection _("get_internal_state");
 
-        global_logger->info("Returning internal state -> next_id={}", next_update_id - 1);
-        global_logger->info("{}", to_string(IdTaggedState{get_state_fn(), next_update_id - 1}));
+        global_logger->info("Returning internal state -> next_id={}", next_update_id);
+        global_logger->info("{}", to_string(IdTaggedState{get_state_fn(), next_update_id}));
 
-        return {get_state_fn(), next_update_id - 1};
+        return {get_state_fn(), next_update_id};
     }
 
     const std::vector<IdTaggedStateUpdateData> &get_update_datas_applied_since_last_authorative_state() const {
@@ -168,7 +168,7 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
 
   private:
     std::vector<IdTaggedStateUpdateData> update_datas_applied_since_last_authorative_state;
-    unsigned int next_update_id = 1;
+    unsigned int next_update_id = 0;
 
     UpdateFunction user_update_fn;
     GetStateFunction get_state_fn;
