@@ -30,6 +30,10 @@ template <typename StateT, typename StateUpdateDataT> class Reconciliation {
     struct IdTaggedState {
         StateT state;
         unsigned int last_sud_id_used_to_update = 0;
+
+        // manual constructor required as apple-clang13 won't generate it
+        IdTaggedState(StateT s = {}, unsigned int id = 0)
+            : state(std::move(s)), last_sud_id_used_to_update(id) {}
     };
 
     struct IdTaggedStateUpdateData {
